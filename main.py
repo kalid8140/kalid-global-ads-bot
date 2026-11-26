@@ -37,6 +37,34 @@ dp = Dispatcher(storage=MemoryStorage())
 user_languages = {}
 
 
+# YOUTUBE PRICES
+
+YOUTUBE_PRICES = {
+    "shorts": {
+        "24h": 400,
+        "3d": 800,
+        "7d": 1000,
+        "15d": 1800,
+        "30d": 3200
+    },
+    "normal": {
+        "24h": 600,
+        "3d": 1200,
+        "7d": 1800,
+        "15d": 3000,
+        "30d": 5500
+    }
+}
+
+DURATION_NAMES = {
+    "24h": "24 Hours",
+    "3d": "3 Days",
+    "7d": "7 Days",
+    "15d": "15 Days",
+    "30d": "30 Days"
+}
+
+
 # LANGUAGES
 
 TEXTS = {
@@ -74,6 +102,8 @@ TEXTS = {
 
 class OrderForm(StatesGroup):
     platform = State()
+    youtube_format = State()
+    youtube_duration = State()
     content = State()
 
 
@@ -122,24 +152,18 @@ async def start(message: Message, state: FSMContext):
 
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="Afaan Oromoo",
-                    callback_data="lang_om"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="አማርኛ",
-                    callback_data="lang_am"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="English",
-                    callback_data="lang_en"
-                )
-            ]
+            [InlineKeyboardButton(
+                text="Afaan Oromoo",
+                callback_data="lang_om"
+            )],
+            [InlineKeyboardButton(
+                text="አማርኛ",
+                callback_data="lang_am"
+            )],
+            [InlineKeyboardButton(
+                text="English",
+                callback_data="lang_en"
+            )]
         ]
     )
 
@@ -176,6 +200,7 @@ async def choose_language(callback: CallbackQuery, state: FSMContext):
 async def new_order(callback: CallbackQuery, state: FSMContext):
     lang = user_languages.get(callback.from_user.id, "en")
 
+    await state.clear()
     await state.set_state(OrderForm.platform)
 
     keyboard = InlineKeyboardMarkup(
@@ -201,15 +226,124 @@ async def new_order(callback: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(OrderForm.platform, F.data.startswith("platform:"))
 async def select_platform(callback: CallbackQuery, state: FSMContext):
+
     platform = callback.data.split(":", 1)[1]
 
     await state.update_data(platform=platform)
-    await state.set_state(OrderForm.content)
+
+    # YOUTUBE SERVICE
+
+    if platform == "YouTube":
+
+        await state.set_state(OrderForm.youtube_format)
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="▶️ YouTube Shorts",
+                    callback_data="ytformat:shorts"
+                )],
+                [InlineKeyboardButton(
+                    text="🎬 Normal YouTube Video",
+                    callback_data="ytformat:normal"
+                )]
+            ]
+        )
+
+        await callback.message.answer(
+            "🔥 YOUTUBE ADVERTISING\n\n"
+            "Choose your advertising type:",
+            reply_markup=keyboard
+        )
+
+    else:
+
+        await state.set_state(OrderForm.content)
+
+        await callback.message.answer(
+            f"✅ Selected: {platform}\n\n"
+            "Now send your advertisement.\n"
+            "You can send text, photo or video."
+        )
+
+    await callback.answer()
+
+
+# YOUTUBE FORMAT
+
+@dp.callback_query(
+    OrderForm.youtube_format,
+    F.data.startswith("ytformat:")
+)
+async def select_youtube_format(
+    callback: CallbackQuery,
+    state: FSMContext
+):
+
+    video_format = callback.data.split(":")[1]
+
+    await state.update_data(youtube_format=video_format)
+
+    await state.set_state(OrderForm.youtube_duration)
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="24 Hours", callback_data="ytduration:24h")],
+            [InlineKeyboardButton(text="3 Days", callback_data="ytduration:3d")],
+            [InlineKeyboardButton(text="7 Days", callback_data="ytduration:7d")],
+            [InlineKeyboardButton(text="15 Days", callback_data="ytduration:15d")],
+            [InlineKeyboardButton(text="30 Days", callback_data="ytduration:30d")]
+        ]
+    )
 
     await callback.message.answer(
-        f"✅ Selected: {platform}\n\n"
-        "Now send your advertisement.\n"
-        "You can send text, photo or video."
+        "📅 Choose advertising duration:",
+        reply_markup=keyboard
+    )
+
+    await callback.answer()
+
+
+# YOUTUBE DURATION AND PRICE
+
+@dp.callback_query(
+    OrderForm.youtube_duration,
+    F.data.startswith("ytduration:")
+)
+async def select_youtube_duration(
+    callback: CallbackQuery,
+    state: FSMContext
+):
+
+    duration = callback.data.split(":")[1]
+
+    data = await state.get_data()
+    video_format = data.get("youtube_format", "shorts")
+
+    price = YOUTUBE_PRICES[video_format][duration]
+    duration_name = DURATION_NAMES[duration]
+
+    await state.update_data(
+        duration=duration,
+        price=price
+    )
+
+    await state.set_state(OrderForm.content)
+
+    format_name = (
+        "YouTube Shorts"
+        if video_format == "shorts"
+        else "Normal YouTube Video"
+    )
+
+    await callback.message.answer(
+        "✅ YOUTUBE ADVERTISEMENT ORDER\n\n"
+        f"📺 Type: {format_name}\n"
+        f"📅 Duration: {duration_name}\n"
+        f"💰 Price: {price} ETB\n\n"
+        "Now send your advertisement video here.\n\n"
+        "Admin will review your video and contact you "
+        "about payment and publishing."
     )
 
     await callback.answer()
@@ -217,28 +351,53 @@ async def select_platform(callback: CallbackQuery, state: FSMContext):
 
 # RECEIVE ADVERTISEMENT
 
-@dp.message(OrderForm.content, F.text | F.photo | F.video)
+@dp.message(OrderForm.content, F.text | F.photo | F.video | F.document)
 async def receive_advertisement(message: Message, state: FSMContext):
+
     if message.from_user.id == ADMIN_ID:
         return
 
     if ADMIN_ID == 0:
-        await message.answer("Admin is not configured. Please try later.")
+        await message.answer(
+            "Admin is not configured. Please try later."
+        )
         return
 
     data = await state.get_data()
+
     platform = data.get("platform", "Not selected")
     username = message.from_user.username or "No username"
 
-    try:
-        await bot.send_message(
-            ADMIN_ID,
-            "📢 NEW ADVERTISEMENT REQUEST\n\n"
-            f"Customer: {message.from_user.full_name}\n"
-            f"Username: @{username}\n"
-            f"User ID: {message.from_user.id}\n"
-            f"Platform: {platform}"
+    details = (
+        "📢 NEW ADVERTISEMENT REQUEST\n\n"
+        f"Customer: {message.from_user.full_name}\n"
+        f"Username: @{username}\n"
+        f"User ID: {message.from_user.id}\n"
+        f"Platform: {platform}\n"
+    )
+
+    if platform == "YouTube":
+
+        video_format = data.get("youtube_format", "Not selected")
+        duration = data.get("duration", "Not selected")
+        price = data.get("price", 0)
+
+        format_name = (
+            "YouTube Shorts"
+            if video_format == "shorts"
+            else "Normal YouTube Video"
         )
+
+        details += (
+            f"Video Type: {format_name}\n"
+            f"Duration: {DURATION_NAMES.get(duration, duration)}\n"
+            f"Price: {price} ETB\n"
+            f"Channel: JokeShift (@Soulturn7)\n"
+        )
+
+    try:
+
+        await bot.send_message(ADMIN_ID, details)
 
         await bot.forward_message(
             chat_id=ADMIN_ID,
@@ -250,12 +409,16 @@ async def receive_advertisement(message: Message, state: FSMContext):
 
         await message.answer(
             TEXTS[lang]["received"]
+            + "\n\nAdmin will review your advertisement "
+            "and contact you about payment and publishing."
         )
 
         await state.clear()
 
     except Exception:
+
         logger.exception("Advertisement forwarding failed")
+
         await message.answer(
             "Sorry! Something went wrong. Please try again."
         )
@@ -265,22 +428,19 @@ async def receive_advertisement(message: Message, state: FSMContext):
 
 @dp.callback_query(F.data == "payment")
 async def payment_menu(callback: CallbackQuery, state: FSMContext):
+
     await state.clear()
 
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="🏦 CBE Bank Transfer",
-                    callback_data="pay_cbe"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="📱 Telebirr",
-                    callback_data="pay_telebirr"
-                )
-            ]
+            [InlineKeyboardButton(
+                text="🏦 CBE Bank Transfer",
+                callback_data="pay_cbe"
+            )],
+            [InlineKeyboardButton(
+                text="📱 Telebirr",
+                callback_data="pay_telebirr"
+            )]
         ]
     )
 
@@ -297,6 +457,7 @@ async def payment_menu(callback: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "pay_cbe")
 async def pay_cbe(callback: CallbackQuery, state: FSMContext):
+
     await state.update_data(payment_method="CBE Bank")
 
     await callback.message.answer(
@@ -316,6 +477,7 @@ async def pay_cbe(callback: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "pay_telebirr")
 async def pay_telebirr(callback: CallbackQuery, state: FSMContext):
+
     await state.update_data(payment_method="Telebirr")
 
     await callback.message.answer(
@@ -335,6 +497,7 @@ async def pay_telebirr(callback: CallbackQuery, state: FSMContext):
 
 @dp.message(PaymentForm.receipt, F.photo | F.document | F.text)
 async def receive_payment_receipt(message: Message, state: FSMContext):
+
     if ADMIN_ID == 0:
         await message.answer("Admin is not configured.")
         return
@@ -345,6 +508,7 @@ async def receive_payment_receipt(message: Message, state: FSMContext):
     username = message.from_user.username or "No username"
 
     try:
+
         await bot.send_message(
             ADMIN_ID,
             "💳 NEW PAYMENT RECEIPT\n\n"
@@ -370,7 +534,9 @@ async def receive_payment_receipt(message: Message, state: FSMContext):
         await state.clear()
 
     except Exception:
+
         logger.exception("Payment receipt forwarding failed")
+
         await message.answer(
             "Sorry! We could not send your receipt. Please try again."
         )
@@ -380,6 +546,7 @@ async def receive_payment_receipt(message: Message, state: FSMContext):
 
 @dp.callback_query(F.data == "contact")
 async def contact_admin(callback: CallbackQuery, state: FSMContext):
+
     await state.clear()
     await state.set_state(ContactForm.message)
 
@@ -394,11 +561,13 @@ async def contact_admin(callback: CallbackQuery, state: FSMContext):
 
 @dp.message(ContactForm.message)
 async def receive_contact(message: Message, state: FSMContext):
+
     if ADMIN_ID == 0:
         await message.answer("Admin is not configured yet.")
         return
 
     try:
+
         await bot.send_message(
             ADMIN_ID,
             "📩 NEW CUSTOMER MESSAGE\n\n"
@@ -419,7 +588,9 @@ async def receive_contact(message: Message, state: FSMContext):
         await state.clear()
 
     except Exception:
+
         logger.exception("Contact forwarding failed")
+
         await message.answer(
             "Message could not be sent. Please try again."
         )
@@ -429,6 +600,7 @@ async def receive_contact(message: Message, state: FSMContext):
 
 @dp.message(Command("admin"))
 async def admin_panel(message: Message):
+
     if message.from_user.id != ADMIN_ID:
         await message.answer("⛔ Access denied.")
         return
@@ -438,6 +610,7 @@ async def admin_panel(message: Message):
         "✅ Bot is running.\n"
         "📢 Advertisement requests are forwarded here.\n"
         "💳 Payment receipts are forwarded here.\n"
+        "▶️ YouTube Shorts and Normal Video orders enabled.\n"
         "🌍 Languages: Oromoo, Amharic, English."
     )
 
@@ -445,6 +618,7 @@ async def admin_panel(message: Message):
 # MAIN FUNCTION
 
 async def main():
+
     logger.info("Kalid Global Ads Bot is starting...")
 
     await dp.start_polling(
